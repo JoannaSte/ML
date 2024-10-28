@@ -1,0 +1,115 @@
+---
+title: "Mój pierwszy projekt"
+subtitle: "Informacje o mnie"
+date: today
+author: "Joanna Stępień"
+abstract-title: "Streszczenie"
+abstract: "treść streszczenia"
+format: 
+  html:
+    
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-title: "Spis Treści"
+    number-sections: true
+    number-depth: 3
+    code-fold: show
+    code-summary: "Napis"
+    code-tools: true
+    code-block-bg: "grey50"
+    code-block-border-left: "black"
+    code-line-numbers: true
+    code-copy: true
+    html-math-method: katex
+    embed-resources: true
+    smooth-scroll: true
+    anchor-sections: true
+    citation: true
+    theme: 
+      light: cosmo
+      dark: darkly
+    fontsize: 1.0em
+    linestretch: 1.5
+execute: 
+  
+  eval: true
+  warning: false
+  echo: true
+  error: false
+  cache: true ##przyśpiesza nam to renderowanie dokumentu #control shift K!!!!!!!!!!
+editor_options: 
+  chunk_output_type: console
+---
+---
+
+## Ładujemy niezbędne pakiety
+```{r}
+library(tidymodels)
+library(parsnip)
+library(readr)       
+library(broom.mixed) 
+library(ggplot2)
+library(dotwhisker)
+library(dplyr)
+library(rstanarm)
+library(GGally)
+```
+
+## ładujemy zbiór danych i go obrabiamy, usuwamy columnę day, brakujące dane, zmieniamy typ month na factor
+
+```{r}
+colnames(airquality) <- tolower(colnames(airquality))
+
+air <-
+  airquality |>
+  as_tibble() |>
+  na.omit() |> 
+  select(-c(day)) |> 
+  mutate(month = factor(month)) 
+```
+
+## Sprawdzamt korelacje pomiędzy danymi za pomocą pakietu GGally
+
+```{r}
+GGally::ggpairs(air, aes(color = month))
+
+
+cor.test(air$ozone, air$solar.r)
+cor.test(air$ozone, air$wind)
+cor.test(air$ozone, air$temp)
+cor.test(air$ozone, as.integer(air$month))
+```
+
+## Skalujemy dane oraz dzielimy na zbiór treningowy i testowy
+
+```{r}
+scaled_data <- air |>
+  mutate(across(c(temp,wind, solar.r), scale))
+
+print(scaled_data)
+
+set.seed(30)
+data_split <- initial_split(scaled_data, strata = ozone)
+train_data <- training(data_split)
+test_data <- testing(data_split)
+print(test_data$ozone)
+```
+
+## Tworzymy model, następnie uczymy go na zbiorze treningowym i dokonujemy ewaluazji na testowym
+
+```{r}
+model <-lm(ozone ~ temp + wind + solar.r + month, data = train_data)
+summary(model)
+predictions <- predict(model, newdata = test_data)
+
+print(predictions)
+```
+## wyświetlamy wykres wartości przewidywanych i prawdziwych ale nie wiem czemu mi nie działa
+```{r}
+ggplot(test_data, aes(x=predictions, y=ozone)) + 
+  geom_point() +
+  geom_abline(intercept=0, slope=1) +
+  labs(x='Predykcje', y='Prawdziwe wartości')
+```
+
