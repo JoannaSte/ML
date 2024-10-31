@@ -1,0 +1,212 @@
+---
+title: "Projekt ML"
+subtitle: "Cwiczenie 3"
+date: today
+author: "Joanna Stępień"
+format: 
+  html:
+    
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-title: "Spis Treści"
+    number-sections: true
+    number-depth: 3
+    code-fold: show
+    code-summary: "Napis"
+    code-tools: true
+    code-block-bg: "grey50"
+    code-block-border-left: "black"
+    code-line-numbers: true
+    code-copy: true
+    html-math-method: katex
+    embed-resources: true
+    smooth-scroll: true
+    anchor-sections: true
+    citation: true
+    theme: 
+      light: cosmo
+      dark: darkly
+    fontsize: 1.0em
+    linestretch: 1.5
+execute: 
+  
+  eval: true
+  warning: false
+  echo: true
+  error: false
+  cache: true
+editor_options: 
+  chunk_output_type: console
+---
+---
+
+## Ładujemy niezbędne pakiety
+```{r}
+library(tidymodels) 
+library(skimr) 
+library(GGally) 
+library(openair) 
+tidymodels_prefer()
+```
+
+## ładujemy zbiór danych,wybieramy konkretny rok, robimy analize wartości oraz usuwamy braki w danych
+
+```{r}
+air <- mydata |> selectByDate(year = 2002) 
+air |> skim()
+air
+air <- air |> na.omit()
+air
+```
+
+## Sprawdzamy korelacje pomiędzy nox i no2 i rysujemy dla nich wykres regresji liniowe. Wyszło nam że dane są mozno skorelowane
+
+```{r}
+set.seed(222)
+air[sample(1:nrow(air), size = 300, replace = F),] |> 
+  select(nox, no2) |> 
+  ggpairs()
+
+library(ggpubr)
+# wykres regresji liniowej, do sprawdzenia danych 
+set.seed(222)
+air[sample(1:nrow(air), size = 300, replace = F),] |> 
+  select(nox, no2) |> 
+  ggplot(aes(nox, no2)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = T, formula = y ~ x) + 
+  stat_cor(label.x = 10, label.y = 80) + 
+  stat_regline_equation(label.x = 10, label.y = 82) +
+  theme_bw()
+```
+
+## Badamy rozkład wartości stężeń azotu 
+
+```{r}
+air |>    
+  ggplot(aes(date, o3)) +     
+  geom_line() +     
+  theme_bw()
+```
+
+## Badamy zakres stężeń, labelujemy je w zależności czy są niskie i wysokie według przyjętej wartości 10 i liczymy ile jest stężeń niskich i wysokich
+
+```{r}
+air |> 
+  pull(o3) |> 
+  range()  
+
+air <-
+  air |>
+  mutate(ozone = cut(
+    o3,
+    breaks = c(-0.1, 10, 53),
+    labels = c("Niskie", "Wysokie")
+  ))
+air |> count(ozone)
+```
+## Dzielimy dataset na zbiór testowy i treningowy
+```{r}
+set.seed(222)
+data_split <- initial_split(data = air, prop = 3/4)
+train_data <- training(data_split)
+test_data <-  testing(data_split)
+```
+## Tworzymy recepture, nie używamy daty bo jest problematyczną wartości i nox bo jest silnie skorelowane z inną zmienną w zbiorze
+```{r}
+air_recipe <- recipe(ozone ~ ., data = train_data) |> 
+  update_role(date, nox, new_role="nowe_inf") 
+```
+
+
+## tworzymy modele oraz przepisy regresji liniowej oraz losowego lasu 
+```{r}
+regresja <- 
+  logistic_reg() |> 
+  set_engine("glm")
+
+regresja_work <- 
+  workflow() |> 
+  add_model(regresja) |> 
+  add_recipe(air_recipe)
+
+las_losowy <- 
+  rand_forest() |>
+  set_engine("ranger") |>
+  set_mode("classification")
+
+las_work <- 
+  workflow() |> 
+  add_model(las_losowy) |> 
+  add_recipe(air_recipe)
+```
+
+## stosujemy walidajce krzyżową za pomocą 10 foldów na obu modelach
+```{r}
+folds <- vfold_cv(train_data, v = 10, strata = ozone)
+folds
+
+results_regresja <-
+  regresja_work |>
+  fit_resamples(folds)
+
+results_regresja |> 
+  collect_metrics() |> 
+  knitr::kable(digits = 3)
+
+results_las <-
+  las_work |>
+  fit_resamples(folds)
+
+results_las |> 
+  collect_metrics() |> 
+  knitr::kable(digits = 3)
+```
+
+## stosujemy walidajce krzyżową powtarzaną za pomocą 10 foldów i 5 powtórzeńna obu modelach
+```{r}
+folds <- vfold_cv(train_data, v = 10, strata = ozone, repeats = 5)
+folds
+
+results_regresja <-
+  regresja_work |>
+  fit_resamples(folds)
+
+results_regresja |> 
+  collect_metrics() |> 
+  knitr::kable(digits = 3)
+
+results_las <-
+  las_work |>
+  fit_resamples(folds)
+
+results_las |> 
+  collect_metrics() |> 
+  knitr::kable(digits = 3)
+```
+
+## stosujemy metodę bootstrap na obu modelach
+```{r}
+bootstrap <- bootstraps(train_data, times = 100, strata = ozone)
+
+
+results_regresja <-
+  regresja_work |>
+  fit_resamples(bootstrap)
+
+results_regresja |> 
+  collect_metrics() |> 
+  knitr::kable(digits = 3)
+
+results_las <-
+  las_work |>
+  fit_resamples(bootstrap)
+
+results_las |> 
+  collect_metrics() |> 
+  knitr::kable(digits = 3)
+
+```
+
+## Uzyskane wyniki pokazują, że dla tego przypadku, lepsze wyniki uzyskuję metoda lodowego lasu. W przypadku regresji, pole pod krzywą roc wyniosło 0.874, natomiast dla metody regresji liniowej z zastosowaniem resaplingu udało się osiągnąć 0.88 a dla lasu losowego nawet 0.922. Pokazuje to jak dużą skuteczność można osiągnąć trenując i testując model na różnych wariancjach tego samego zestawu danych. Metody te są lepsze niż stosowanie randomowego jednorazowego podziału.
