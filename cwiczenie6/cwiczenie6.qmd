@@ -1,0 +1,259 @@
+---
+title: "Projekt ML"
+subtitle: "Cwiczenie 6"
+date: today
+author: "Joanna Stępień"
+format: 
+  html:
+    
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-title: "Spis Treści"
+    number-sections: true
+    number-depth: 3
+    code-fold: show
+    code-summary: "Napis"
+    code-tools: true
+    code-block-bg: "grey50"
+    code-block-border-left: "black"
+    code-line-numbers: true
+    code-copy: true
+    html-math-method: katex
+    embed-resources: true
+    smooth-scroll: true
+    anchor-sections: true
+    citation: true
+    theme: 
+      light: cosmo
+      dark: darkly
+    fontsize: 1.0em
+    linestretch: 1.5
+execute: 
+  
+  eval: true
+  warning: false
+  echo: true
+  error: false
+  cache: true
+editor_options: 
+  chunk_output_type: console
+---
+---
+
+## Ładujemy niezbędne pakiety
+```{r}
+pkg = c(
+  "tidymodels",
+  "glmnet",
+  "ranger",
+  "rpart",
+  "readr",
+  "tidymodels",
+  "vip",
+
+  "openair",
+  "gt"
+)
+```
+
+## ładujemy zbiór danych,wybieramy konkretny rok, robimy analize wartości, żeby sprawdzić korelacje oraz usuwamy braki w danych
+
+```{r}
+pkg |> 
+  purrr::map(.f = ~ require(.x, character.only = T)) ; rm(pkg)
+
+tidymodels_prefer()
+
+dane <- importAURN(site = "kc1", year = 2021)
+
+# przyjrzy się danym 
+skimr::skim(dane)
+dane |> GGally::ggpairs()
+
+dane <- dane |> 
+  select(o3, nox, no2, ws, wd, air_temp) |> 
+  na.omit()
+
+dane <- 
+  dane |> mutate(
+    wd = cut(
+      wd,
+      breaks = 16,
+      labels = seq(1, 16)
+    )
+  )ir |> na.omit()
+air
+```
+
+## Dzielimy zbior na testowy i uczący 
+
+```{r}
+set.seed(222)
+data_split <- initial_split(data = dane, prop = 3/4, strata=o3)
+train_data <- training(data_split)
+test_data <-  testing(data_split)
+```
+
+## tworzymy 3 modele, regresji liniowej, drzewa dezycyjnego oraz lasu losowego z możlwiością odstrajania hiperparametrów
+
+```{r}
+linear_regression <-
+  linear_reg(
+    penalty = tune(),
+    mixture = tune()
+  ) |>
+  set_engine(engine = "glmnet") |>
+  set_mode("regression")
+
+rand_forest <- 
+  rand_forest(mtry = tune(),
+              min_n = tune(),
+              trees = tune()) |>
+  set_engine(engine = "ranger") |> 
+  set_mode("regression")
+
+decision_tree <- decision_tree(
+  cost_complexity = tune(),
+  tree_depth = tune(),
+  min_n = tune()
+) |>
+  set_engine("rpart") |>
+  set_mode("regression")
+
+```
+
+## Tworzymy przepis i przepływ pracy dla każdego modelu
+
+```{r}
+recipe <- recipe(o3 ~ ., data = train_data) |> 
+  step_dummy(all_nominal_predictors())
+recipe |> summary()
+
+
+reg_workflow <-
+  workflow() |>
+  add_model(linear_regression) |>
+  add_recipe(recipe)
+
+tree_workflow <-
+  workflow() |>
+  add_model(decision_tree) |>
+  add_recipe(recipe)
+
+forest_workflow <-
+  workflow() |>
+  add_model(rand_forest) |>
+  add_recipe(recipe) 
+```
+## tworzymy siatkę hiperparametrów (wybrane małe wartości, żeby bardzo długo się nie liczyło)
+```{r}
+red_grid <-
+  grid_regular(
+    penalty(),
+    mixture(),
+    levels = 3
+  )
+
+tree_grid <-
+  grid_regular(
+    cost_complexity(),
+    tree_depth(),
+    min_n(),
+    levels = 2
+  )
+
+forest_grid <-
+  grid_regular(
+    mtry(range=c(1, 10)),
+    trees(),
+    min_n(),
+    levels = 2
+  )
+```
+## Wybieramy metryki odpowiednie do naszego zadania, czyli przewidywania wartości
+```{r}
+metrics <- metric_set(
+  mae,
+  rmse,
+
+)
+```
+
+## Tworzymy foldy oraz dostrajamy hiperparametry modelu i końcowo wybieramy najelpsze na podtsawie metryki mae
+```{r}
+set.seed(234)
+folds <- vfold_cv(train_data)
+# Dostrajanie modelu
+reg_tuning <- tune_grid(
+  reg_workflow,
+  resamples = folds,
+  grid = red_grid,
+  metrics = metrics
+)
+
+tree_tuning <- tune_grid(
+  tree_workflow,
+  resamples = folds,
+  grid = tree_grid,
+  metrics = metrics
+)
+
+forest_tuning <- tune_grid(
+  forest_workflow,
+  resamples = folds,
+  grid = forest_grid,
+  metrics = metrics
+)
+
+reg_model <- select_best(reg_tuning, metric ="mae")
+tree_model <- select_best(tree_tuning, metric ="mae")
+forest_model <- select_best(forest_tuning, metric ="mae")
+
+```
+
+## tworzymy finalny przpływ pracy z najlepszymi modelami i trenujemy je
+```{r}
+final_mod_reg <-  work |> finalize_workflow(reg_model)
+final_mod_tree <-  work |> finalize_workflow(tree_model)
+final_mod_forest <-  work |> finalize_workflow(forest_model)
+
+final_fit_reg <- final_mod_reg |> last_fit(split = data_split)
+final_fit_tree <- final_mod_tree |> last_fit(split = data_split)
+final_fit_forest  <- final_mod_forest |> last_fit(split = data_split)
+
+```
+
+## Wizualizujemy wyniki
+```{r}
+
+final_fit_reg |>
+  extract_fit_parsnip() |>
+  vip(num_features = 20) +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  geom_boxplot(color = "black", fill = "grey85")
+
+final_fit_tree |>
+  extract_fit_parsnip() |>
+  vip(num_features = 20) +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  geom_boxplot(color = "black", fill = "grey85")
+
+final_fit_forest |>
+  extract_fit_parsnip() |>
+  vip(num_features = 20) +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  geom_boxplot(color = "black", fill = "grey85")
+
+bind_rows(
+  final_fit_reg |> collect_metrics() |> select(-.config) |> mutate(model = "linear_reg"),
+  final_fit_tree |> collect_metrics() |> select(-.config) |> mutate(model = "decision_tree"),
+  final_fit_forest |> collect_metrics() |> select(-.config) |> mutate(model = "rand_forest")
+) |> knitr::kable(digits = 3)
+
+
+```
+
